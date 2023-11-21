@@ -1,12 +1,76 @@
-
 #pragma kernel CSMain
 
-RWTexture2D<float4> Result;
+RWTexture2D<float> Displacement;
+RWTexture2D<float4> Albedo;
+RWTexture2D<float4> Normal;
+uint2 Resolution;
+float PerlinScale;
+int PerlinDepth;
+const float Size;
+const float Height;
+const float SlopePower;
 
-[numthreads(8,8,1)]
-void CSMain (uint3 id : SV_DispatchThreadID)
-{
+float2 hash(float2 p) {
+    p = float2(dot(p, float2(127.1,311.7)), dot(p, float2(269.5,183.3)));
+    return -1.0 + 2.0 * frac(sin(p)*43758.5453123);
+}
+float noise(in float2 p) {
+    const float K1 = 0.366025404; // (sqrt(3)-1)/2;
+    const float K2 = 0.211324865; // (3-sqrt(3))/6;
+
+    float2 i = floor(p + (p.x + p.y)* K1);
+    float2 a = p - i + (i.x + i.y) * K2;
+    float m = step(a.y, a.x);
+    float2 o = float2(m, 1 - m);
+    float2 b = a - o + K2;
+    float2 c = a - 1.0 + 2.0 * K2;
+    float3 h = max(0.5 - float3(dot(a,a), dot(b,b), dot(c,c)), 0);
+    float3 n = h * h * h * h * float3(dot(a, hash(i+0.0)), dot(b, hash(i + o)), dot(c, hash(i + 1.0)));
+    return dot(n, float3(70.0, 70.0, 70.0));
     
+}
+float perlin(in float2 uv, uint depth) {
+    float output = 0;
+    const float2x2 m = float2x2( 1.6,  1.2, -1.2,  1.6 );
+    for(uint i = 1; i <= depth; i++) {
+        output += noise(uv) / pow(2.0, i);
+        uv = mul(m, uv);
+    }
+    return (output + 1)/2;
+}
 
-    Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+float3 GenerateNormal(float2 uv, float scale) {
+    float2 inverseRes = 1.0 / Resolution;
+    float topLeft = perlin((uv + inverseRes * int2(-1, -1)) * scale, PerlinDepth);
+    float left = perlin((uv + inverseRes * int2(-1, 0)) * scale, PerlinDepth);
+    float bottomLeft = perlin((uv + inverseRes * int2(-1, +1)) * scale, PerlinDepth);
+    float up = perlin((uv + inverseRes * int2(0, -1)) * scale, PerlinDepth);
+    float down = perlin((uv + inverseRes * int2(0, 1)) * scale, PerlinDepth);
+    float topRight = perlin((uv + inverseRes * int2(1, -1)) * scale, PerlinDepth);
+    float right = perlin((uv + inverseRes * int2(1, 0)) * scale, PerlinDepth);
+    float bottomRight = perlin((uv + inverseRes * int2(1, 1)) * scale, PerlinDepth);
+
+    const float dx = ((topRight + 2.0 * right + bottomRight) - (topLeft + 2.0 * left + bottomLeft)) * Resolution.x / 12;
+    const float dy = ((bottomLeft + 2.0 * down + bottomRight) - (topLeft + 2.0 * up + topRight)) * Resolution.y / 12;
+    const float dz = 1.0 / Height;
+    
+    return normalize(float3(dx, dy, dz));
+}
+
+//void Trace(in float2 startPosition, out float2 endPosition) {
+//    
+//}
+
+[numthreads(16,16,1)] 
+void CSMain (uint3 id : SV_DispatchThreadID) {
+    float2 uv = id.xy / (float2)Resolution;
+    float height = perlin(PerlinScale * uv, PerlinDepth);
+    float3 normal = GenerateNormal(uv, PerlinScale);
+    Normal[id.xy] = float4(0.5 * (normal + 1.0), 0);
+    const float halfPI = 1.57079632679;
+    float3 slope = float3(normalize(normal.xy), 1 - dot(normal, float3(0,0,1.0)));
+    slope.z = pow(abs(slope.z), SlopePower);
+    Albedo[id.xy] = float4(0.5 * (slope.xy + 1.0), slope.z, 0);
+
+    Displacement[id.xy] = height;
 }
