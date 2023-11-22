@@ -1,19 +1,44 @@
-#pragma kernel CSMain
+#pragma kernel GenerateNoise
+#pragma kernel CSTrace
+#pragma kernel GenerateNormals
 
 RWTexture2D<float> Displacement;
 RWTexture2D<float4> Albedo;
-RWTexture2D<float4> Normal;
+RWTexture2D<float3> Normal;
+RWTexture2D<float> Slope;
+RWTexture2D<float> Erosion;
+
 uint2 Resolution;
 float PerlinScale;
 int PerlinDepth;
+
 const float Size;
 const float Height;
+
 const float SlopePower;
+const float DropletDensity;
+const uint MaxDropletSteps;
+uint Seed = 1;
 
 float2 hash(float2 p) {
     p = float2(dot(p, float2(127.1,311.7)), dot(p, float2(269.5,183.3)));
     return -1.0 + 2.0 * frac(sin(p)*43758.5453123);
 }
+float RandomValue(inout uint rngState) {
+    rngState = rngState * 747796405 + 2891336453;
+    uint result = ((rngState >> ((rngState >> 28) + 4)) ^ rngState) * 277803737;
+    result = (result >> 22) ^ result;
+    return result / 4294967295.0;
+}
+
+float rand(in out float p)
+{
+    p = frac(p * .1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return frac(p);
+}
+
 float noise(in float2 p) {
     const float K1 = 0.366025404; // (sqrt(3)-1)/2;
     const float K2 = 0.211324865; // (3-sqrt(3))/6;
@@ -39,38 +64,100 @@ float perlin(in float2 uv, uint depth) {
     return (output + 1)/2;
 }
 
-float3 GenerateNormal(float2 uv, float scale) {
-    float2 inverseRes = 1.0 / Resolution;
-    float topLeft = perlin((uv + inverseRes * int2(-1, -1)) * scale, PerlinDepth);
-    float left = perlin((uv + inverseRes * int2(-1, 0)) * scale, PerlinDepth);
-    float bottomLeft = perlin((uv + inverseRes * int2(-1, +1)) * scale, PerlinDepth);
-    float up = perlin((uv + inverseRes * int2(0, -1)) * scale, PerlinDepth);
-    float down = perlin((uv + inverseRes * int2(0, 1)) * scale, PerlinDepth);
-    float topRight = perlin((uv + inverseRes * int2(1, -1)) * scale, PerlinDepth);
-    float right = perlin((uv + inverseRes * int2(1, 0)) * scale, PerlinDepth);
-    float bottomRight = perlin((uv + inverseRes * int2(1, 1)) * scale, PerlinDepth);
+float3 GetNormalAt(float2 uv) {
+    const uint2 id = uv * Resolution;
+    
+    const float topLeft = Displacement[id + int2(-1, -1)];
+    const float left =  Displacement[id + int2(-1, 0)];
+    const float bottomLeft = Displacement[id + int2(-1, +1)];
+    const float up = Displacement[id + int2(0, -1)];
+    const float down = Displacement[id + int2(0, 1)];
+    const float topRight = Displacement[id + int2(1, -1)];
+    const float right = Displacement[id + int2(1, 0)];
+    const float bottomRight = Displacement[id + int2(1, 1)];
 
     const float dx = ((topRight + 2.0 * right + bottomRight) - (topLeft + 2.0 * left + bottomLeft)) * Resolution.x / 12;
     const float dy = ((bottomLeft + 2.0 * down + bottomRight) - (topLeft + 2.0 * up + topRight)) * Resolution.y / 12;
     const float dz = 1.0 / Height;
     
-    return normalize(float3(dx, dy, dz));
+    return (normalize(float3(dx, dy, dz)) * 0.5 + 0.5);
 }
+float Sample(float2 uv, RWTexture2D<float> input) {
+    return input[uint2(uv * Resolution)];
+}
+float3 Sample(float2 uv, RWTexture2D<float3> input) {
+    return input[uint2(uv * Resolution)];
+}
+void Add(float4 value, float2 uv, RWTexture2D<float4> output) {
+    output[uint2(uv * Resolution)] += value;
+}
+void Add(float value, float2 uv, RWTexture2D<float> output) {
+    output[uint2(uv * Resolution)] += value;
+}
+void Set(float3 value, float2 uv, RWTexture2D<float3> output) {
+    output[uint2(uv * Resolution)] = value;
+}
+    
+void Trace(in float2 startPosition) {
+    Seed++;
+    float2 position = startPosition;
+    float2 lastPosition = startPosition;
 
-//void Trace(in float2 startPosition, out float2 endPosition) {
-//    
-//}
+    
+    float sediment = 0;
+    
+    const float depositionRate = 0.00001f;
+    const float erosionRate = 0.000001f;
+
+    const float2 stepSize = 0.5 / Resolution;
+
+    for(uint i = 0; i < MaxDropletSteps; i++) {
+        float3 normal = Sample(position, Normal) * 2 - 1;
+        if(normal.z > 0.999)
+            break;
+        const float deposition = sediment * depositionRate * normal.z;
+        const float erosion = erosionRate * (1 - normal.z) * min(1, i * 0.001);
+        
+        float height = Sample(position, Displacement);
+        float lastHeight = Sample(lastPosition, Displacement);
+        
+        const float diff = (erosion - deposition);
+        Add(-diff, lastPosition, Displacement);
+        sediment += diff;
+
+        lastPosition = position;
+        position += stepSize * -normalize(normal.xy) * (1 - normal.z);
+        
+        float erosionValue = Sample(position, Erosion);
+        Add(pow((1 - erosionValue) / 2, 4), position, Erosion);
+        Set(GetNormalAt(position), position, Normal);
+        
+        if ((position.x > 1 || position.y > 1 || position.x < 0 || position.y < 0))
+            return;
+    }
+}
 
 [numthreads(16,16,1)] 
-void CSMain (uint3 id : SV_DispatchThreadID) {
-    float2 uv = id.xy / (float2)Resolution;
-    float height = perlin(PerlinScale * uv, PerlinDepth);
-    float3 normal = GenerateNormal(uv, PerlinScale);
-    Normal[id.xy] = float4(0.5 * (normal + 1.0), 0);
-    const float halfPI = 1.57079632679;
-    float3 slope = float3(normalize(normal.xy), 1 - dot(normal, float3(0,0,1.0)));
-    slope.z = pow(abs(slope.z), SlopePower);
-    Albedo[id.xy] = float4(0.5 * (slope.xy + 1.0), slope.z, 0);
-
+void GenerateNoise (uint3 id : SV_DispatchThreadID) {
+    const float2 uv = id.xy / (float2)Resolution;
+    const float height = perlin(PerlinScale * uv, PerlinDepth);
     Displacement[id.xy] = height;
 }
+
+[numthreads(16,16,1)] 
+void GenerateNormals(uint3 id : SV_DispatchThreadID) {
+    const float2 uv = id.xy / (float2)Resolution;
+    float3 normal = GetNormalAt(uv);
+    Normal[id.xy] = normal;
+    float slope = -2 * -normal.z;
+    slope = pow(abs(slope), SlopePower);
+    Slope[id.xy] = slope;
+}
+
+
+[numthreads(16, 16, 1)]
+void CSTrace (uint3 id : SV_DispatchThreadID) {
+    const float2 uv = id.xy / (float2)Resolution;
+    Trace(hash(uv));
+}
+
