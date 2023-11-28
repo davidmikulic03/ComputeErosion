@@ -8,7 +8,11 @@ Shader "Unlit/Terrain"
         _Slope ("Slope", 2D) = "white" {}
         _Erosion ("Erosion Map", 2D) = "white" {}
         _Displacement ("Displacement", Float) = 1
-        _DisplaceAlongNormal("Displace Along Normal", float) = 0
+        _DisplaceAlongNormal ("Displace Along Normal", float) = 0
+        _MainColor ("Rock Color", Color) = (0.1, 0.15, 0.2)
+        _ErosionColor ("Erosion Color", Color) = (1, 1, 1)
+        _ErosionHandleMin ("Erosion Handle Min", Range(0.0, 1.0)) = 0.0
+        _ErosionHandleMax ("Erosion Handle Max", Range(0.0, 1.0)) = 1
     }
     SubShader
     {
@@ -62,6 +66,12 @@ Shader "Unlit/Terrain"
             float _Size;
 
             float _DisplaceAlongNormal;
+
+            float4 _MainColor;
+            float4 _ErosionColor;
+
+            float _ErosionHandleMin;
+            float _ErosionHandleMax;
             
             v2f vert (appdata v)
             {
@@ -83,11 +93,15 @@ Shader "Unlit/Terrain"
                 float slope = tex2D(_Slope, i.uv);
                 float3 normal = tex2D(_Normal, i.uv).xyz * 2 - 1;
                 float erosionMap = tex2D(_Erosion, i.uv);
-
+                float lighting = clamp(dot(normal, normalize(float3(1, 1, 2))), 0, 1);
+                float t = 1 / (_ErosionHandleMax - _ErosionHandleMin) * erosionMap + _ErosionHandleMin / (_ErosionHandleMin - _ErosionHandleMax);
+                float4 albedo = lerp(_MainColor, _ErosionColor, clamp(t, 0, 1));
+                
+                return albedo * lighting;
                 return erosionMap;
-                return dot(normal, normalize(float3(1, 2, 4)));
-                return float4(normal.xyz, 1);
+                return (1 - normal.z);
                 return normal.z;
+                return float4(normal.xyz, 1);
                 return slope;
                 UNITY_APPLY_FOG(i.fogCoord, col);
             }

@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -20,6 +21,7 @@ public class ErosionComponent : MonoBehaviour
     [SerializeField] [Range(10, 1000)] int maxDropletSteps = 100;
     [SerializeField] [Range(0.0001f, 0.01f)] float dropletWeight = 0.001f;
 
+    [SerializeField] bool initialize = false;
     [SerializeField] bool erode = false;
 
     private RenderTexture generatedHeight;
@@ -31,9 +33,13 @@ public class ErosionComponent : MonoBehaviour
 
     private void OnValidate()
     {
-        if (erode)
+        if (initialize)
         {
             Initialize();
+            initialize = false;
+        }
+        if (erode)
+        {
             Erode();
             erode = false;
         }

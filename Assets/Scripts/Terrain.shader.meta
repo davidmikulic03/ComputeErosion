@@ -2,7 +2,12 @@ fileFormatVersion: 2
 guid: 3b4d81092e81aa541965c6cd2f371c9e
 ShaderImporter:
   externalObjects: {}
-  defaultTextures: []
+  defaultTextures:
+  - _DisplacementMap: {instanceID: 0}
+  - _Albedo: {instanceID: 0}
+  - _Normal: {instanceID: 0}
+  - _Slope: {instanceID: 0}
+  - _Erosion: {instanceID: 0}
   nonModifiableTextures: []
   userData: 
   assetBundleName: 
